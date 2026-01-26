@@ -1,12 +1,12 @@
 import random
 import numpy as np
 from config import TOLERANCE, MAX_ITER
-from phe.model import PlateHeatExchanger
+from phe_model import PlateHeatExchanger
 from fluids import FluidProperties
 
 
 class Solver:
-    def __init(self):
+    def __init__(self):
         self.phe = PlateHeatExchanger()
         self.fluid_hot = FluidProperties('flue_gas')
         self.fluid_cold = FluidProperties('water')
@@ -28,8 +28,8 @@ class Solver:
 
 
         #Step 2 : Initialize Guess (T_out_guess <= T_in)
-        T_hot_out_guess = T_h_in - 10 #initial guess for hot outlet temperature
-        T_hot_out_curr = T_h_in
+        T_hot_out_guess = T_hot_in - 10 #initial guess for hot outlet temperature
+        T_hot_out_curr = T_hot_in
 
         iteration = 0
         error = float('inf')
