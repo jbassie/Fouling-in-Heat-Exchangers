@@ -69,23 +69,23 @@ class Solver:
             T_hot_out_calc = T_hot_in - (Q_actual / C_h)
 
             #3g. Calculate Guess Error(Relaxation)
-            T_h_out_guess = (T_hot_out_calc + T_hot_out_guess) / 2
+            T_hot_out_guess = (T_hot_out_calc + T_hot_out_guess) / 2
 
             #check convergence
-            error = abs(T_h_out_guess - T_hot_out_guess)
+            error = abs(T_hot_out_calc - T_hot_out_guess)
             iteration += 1
 
-            T_h_out_final = T_h_out_calc
+            T_hot_out_final = T_hot_out_calc
             #Calculate Water Outlet based on Converged Q
 
-            T_c_out_final = T_cold_in + (Q_actual / (m_cold * props_cold['cp']))
+            T_cold_out_final = T_cold_in + (Q_actual / (m_cold * props_cold['cp']))
         
         #Step 4 : Record Data
         return {
             'inputs': inputs,
             'results': {
-                'T_hot_out': T_h_out_final,
-                'T_cold_out': T_c_out_final,
+                'T_hot_out': T_hot_out_final,
+                'T_cold_out': T_cold_out_final,
                 'Q_actual': Q_actual,
                 'U_overall': U_overall,
                 'h_hot': res_h['h'],

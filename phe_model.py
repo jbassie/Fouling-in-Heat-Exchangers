@@ -3,24 +3,28 @@ Plate Heat Exchanger (PHE) Model
 This file contains the model for the Plate Heat Exchanger (PHE).
 This model is based on the literature and the geometry of the PHE.
 """
+import numpy as np
+from config import K_DEPOSIT, K_PLATE
 
 class PlateHeatExchanger:
     def __init__(self):
         #Geometry parameters (Fixed parameters for simulation)
-       self.Length_of_plate = 1.0               #Length of plate (m)
-       self.Width_of_plate = 0.5               #Width of plate (m)
-       self.Spacing_between_plates = 0.003     #Spacing/Gap between plates (m) - Very narrow!
-       self.Chevron_angle = 60                  #Chevron angle (degrees)
-       self.Number_of_channels= 50              #Total number of channels
+       self.lengthOfPlate = 1.0               #Length of plate (m)
+       self.widthofPlate = 0.5               #Width of plate (m)
+       self.spacingBetweenPlates = 0.003     #Spacing/Gap between plates (m) - Very narrow!
+       self.chevronAngle = 60                  #Chevron angle (degrees)
+       self.numberOfPlates= 50              #Total number of channels
+       self.plateThickness = 0.0006                    #Plate thickness (m)
 
     def _calc_hydraulic_diameter(self, fouling_thickness):
         """
         Calculate the hydraulic diameter based on the reduced gap
         Adapts the logic of diameter reduction in literature (Eqns 2 -3)
         """
-        b_eff = self.Spacing_between_plates - (2 * fouling_thickness)
+        b_eff = self.spacingBetweenPlates - (2 * fouling_thickness)
 
-        if b_eff < 0: return 1e-6
+        if b_eff <= 0:
+            b_eff = 1e-6  # Minimum effective gap to avoid division by zero
         return 2 * b_eff, b_eff
 
     def _calc_nusselt(self, Re, Pr):
@@ -44,7 +48,7 @@ class PlateHeatExchanger:
         Dh_eff, b_eff = self._calc_hydraulic_diameter(t_fouling)
 
         #3 Hydrodynamics
-        flow_area = self.Width_of_plate * b_eff * self.Number_of_channels
+        flow_area = self.widthofPlate * b_eff * self.numberOfPlates
         velocity  = m_dot / (props['rho'] * flow_area)
         Re = (props['rho'] * velocity * Dh_eff) / props['mu']
 
@@ -65,7 +69,7 @@ class PlateHeatExchanger:
         Adapted Eq 14 for flat plates
         """
 
-        R_wall = self.t_plate / 
+        R_wall = self.plateThickness / K_PLATE  #Thermal resistance of plate material
         R_total = (1/h_hot) + (1/h_cold) + R_wall +  Rf_hot + Rf_cold
         return 1/ R_total
     
@@ -84,7 +88,7 @@ class PlateHeatExchanger:
         C_r = C_min / C_max
 
 
-        Area_total = self.Length_of_plate * self.Width_of_plate * (self.Number_of_channels * 2)
+        Area_total = self.lengthOfPlate * self.widthofPlate * (self.numberOfPlates * 2)
         NTU = U * Area_total / C_min
 
         #Counter-Flow Effectiveness Equation
@@ -95,6 +99,4 @@ class PlateHeatExchanger:
         else: # C_r = 1 case
             epsilon = NTU / (1 + NTU)
 
-        return epsilon, NTU
-    
-  
+        return epsilon, C_min, C_h, C_c
