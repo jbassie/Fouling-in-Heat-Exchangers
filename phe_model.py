@@ -39,16 +39,26 @@ class PlateHeatExchanger:
         """
         Computes velocity, Reynolds, and Heat Transfer Coefficient (h) 
         Corresponds to the 3b(Hot) and 3d(Cold) in Table 2
+        
+        Note: Uses unfouled geometry for flow area calculation to ensure fouling
+        resistance always reduces heat transfer. Fouling is applied as thermal
+        resistance in calc_overall_U(), not through geometry reduction.
         """
         #1. Calculate fouling layer thickness from Resistance (R = t/k)
-        #Rearranged from Eq 4/11 logic
+        #Rearranged from Eq 4/11 logic (for reference/reporting only)
         t_fouling = Rf * K_DEPOSIT
 
-        #2. Geometry Adjustments(Fouling reduces flow area)
-        Dh_eff, b_eff = self._calc_hydraulic_diameter(t_fouling)
+        #2. Use unfouled geometry for flow area calculation
+        # This prevents velocity increase from dominating fouling resistance
+        # Fouling resistance is applied separately in calc_overall_U()
+        b_eff_unfouled = self.spacingBetweenPlates
+        Dh_eff = 2 * b_eff_unfouled
 
         #3 Hydrodynamics
-        flow_area = self.widthofPlate * b_eff * self.numberOfPlates
+        # In a PHE, channels alternate between hot and cold sides
+        # If numberOfPlates is total channels, each side uses half
+        channels_per_side = self.numberOfPlates / 2
+        flow_area = self.widthofPlate * b_eff_unfouled * channels_per_side
         velocity  = m_dot / (props['rho'] * flow_area)
         Re = (props['rho'] * velocity * Dh_eff) / props['mu']
 

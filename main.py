@@ -57,7 +57,7 @@ def generate_sequential_run(solver, start_time, hours=24):
             'R_f_cold': current_Rf_cold,
         }
         try:
-            res = solver.run_simulation_step(inputs)
+            res = solver.run_simulation(inputs)
 
             flat_data = {
                 'timestamp': current_time.strftime(TIME_FORMAT),
@@ -95,7 +95,7 @@ def main():
     df.to_csv('phe_transformer_dataset_timestamp.csv', index=False)
     
     print(f"Dataset generated: phe_transformer_dataset_timestamp.csv ({len(df)} samples)")
-    print(df[['timestamp', 'Rf_hot', 'T_hot_out', 'U']].head())
+    print(df[['timestamp', 'R_f_hot', 'T_hot_out', 'U_overall']].head())
 
 if __name__ == "__main__":
     main()

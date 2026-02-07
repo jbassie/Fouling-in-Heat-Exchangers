@@ -29,7 +29,6 @@ class Solver:
 
         #Step 2 : Initialize Guess (T_out_guess <= T_in)
         T_hot_out_guess = T_hot_in - 10 #initial guess for hot outlet temperature
-        T_hot_out_curr = T_hot_in
 
         iteration = 0
         error = float('inf')
@@ -74,13 +73,18 @@ class Solver:
             #check convergence
             error = abs(T_hot_out_calc - T_hot_out_guess)
             iteration += 1
-
-            T_hot_out_final = T_hot_out_calc
-            #Calculate Water Outlet based on Converged Q
-
-            T_cold_out_final = T_cold_in + (Q_actual / (m_cold * props_cold['cp']))
         
-        #Step 4 : Record Data
+        #Step 4 : Calculate Final Values After Convergence
+        # Use the converged values to calculate final outlet temperatures
+        T_hot_out_final = T_hot_out_calc
+        
+        # Recalculate cold side properties with final temperatures for accuracy
+        T_cold_out_final_guess = T_cold_in + (Q_actual / (m_cold * props_cold['cp']))
+        T_cold_mean_final = (T_cold_in + T_cold_out_final_guess) / 2
+        props_cold_final = self.fluid_cold.get_properties(T_cold_mean_final)
+        T_cold_out_final = T_cold_in + (Q_actual / (m_cold * props_cold_final['cp']))
+        
+        #Step 5 : Record Data
         return {
             'inputs': inputs,
             'results': {
