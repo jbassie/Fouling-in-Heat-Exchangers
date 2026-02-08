@@ -26,3 +26,23 @@ SIMULATION_START_DATE = datetime(2023, 1, 1)
 SIMULATION_START_TIME = datetime(2023,1,1)
 SIMULATION_END_TIME = datetime(2024,1,1)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+#Simulation Configuration
+EXCHANGER_TYPE = 'PHE'  # Options: 'PHE' or 'CROSSFLOW'
+GENERATE_TIME_COLUMN = True  # Whether to include timestamp column
+ADD_NOISE = False  # Whether to add noise to output data
+NOISE_LEVEL = 0.02  # Noise level as fraction (0.02 = 2% standard deviation)
+NOISE_COLUMNS = [  # Columns to add noise to (if ADD_NOISE is True)
+    'T_hot_out',
+    'T_cold_out',
+    'Q_actual',
+    'U_overall',
+    'h_hot',
+    'h_cold',
+]
+
+#Sequential Run Configuration
+NUM_RUNS = 10  # Number of separate maintenance cycles/runs
+HOURS_PER_RUN = 500  # Hours of data per run
+FOULING_GROWTH_HOT = (0.0, 0.00001)  # Range for fouling growth per hour (hot side)
+FOULING_GROWTH_COLD = (0.0, 0.000005)  # Range for fouling growth per hour (cold side)

@@ -8,11 +8,12 @@ This class implements a cross-flow heat exchanger model following the algorithm:
 4. Overall U, NTU, and effectiveness calculation
 """
 import numpy as np
-from config import K_DEPOSIT, K_PLATE, TOLERANCE, MAX_ITER
+from config import K_PLATE
 from fluids import FluidProperties
+from base_model import BaseHeatExchanger
 
 
-class CrossFlowHeatExchanger:
+class CrossFlowHeatExchanger(BaseHeatExchanger):
     """
     Cross-flow heat exchanger model with fouling effects.
     
@@ -35,19 +36,6 @@ class CrossFlowHeatExchanger:
         # Initialize fluid property handlers
         self.fluid_hot = FluidProperties('flue_gas')
         self.fluid_cold = FluidProperties('water')
-    
-    def _calc_fouling_thickness(self, Rf: float) -> float:
-        """
-        Calculate fouling layer thickness from resistance.
-        Equation: R = t/k, so t = R * k
-        
-        Args:
-            Rf: Fouling resistance (m²·K/W)
-            
-        Returns:
-            Fouling thickness (m)
-        """
-        return Rf * K_DEPOSIT
     
     def _calc_hydraulic_diameter_water(self, D_f_i: float) -> float:
         """
@@ -313,7 +301,7 @@ class CrossFlowHeatExchanger:
         return NTU
     
     def calc_effectiveness(self, U: float, NTU: float, m_dot_hot: float, cp_hot: float,
-                          m_dot_cold: float, cp_cold: float) -> float:
+                          m_dot_cold: float, cp_cold: float) -> tuple:
         """
         Calculate heat exchanger effectiveness.
         epsilon = f(U, NTU, C_r)
@@ -329,7 +317,11 @@ class CrossFlowHeatExchanger:
             cp_cold: Cold side specific heat (J/(kg·K))
             
         Returns:
-            Effectiveness (dimensionless, 0-1)
+            Tuple of (effectiveness, C_min, C_h, C_c) where:
+            - effectiveness: dimensionless (0-1)
+            - C_min: minimum heat capacity rate (W/K)
+            - C_h: hot side heat capacity rate (W/K)
+            - C_c: cold side heat capacity rate (W/K)
         """
         C_h = m_dot_hot * cp_hot
         C_c = m_dot_cold * cp_cold
@@ -346,122 +338,6 @@ class CrossFlowHeatExchanger:
         else:  # C_r = 1
             epsilon = 1 - np.exp(-NTU)
         
-        return epsilon
+        return epsilon, C_min, C_h, C_c
     
-    def run_simulation(self, inputs: dict) -> dict:
-        """
-        Run cross-flow heat exchanger simulation following the specified algorithm.
-        
-        Algorithm:
-        (1) Random selection of inputs (done externally)
-        (2) Guess T_fo,guess <= T_fi and initialize T_fo = T_fi
-        (3) Repeat (a)-(g) till |T_fo,guess - T_fo| < 1e-6
-        (a) Evaluate flue gas properties at bulk mean temperature
-        (b) Compute flue-side fouling variables D_f,o, V_max,f, M_flue,f, h_flue (Eqns 10-13)
-        (c) Evaluate T_wo,guess from energy balance and water properties at bulk mean
-        (d) Determine water-side fouling variables D_f,i, V_f, M_w,f, h_w (Eqns 4-7)
-        (e) Calculate U, NTU, epsilon
-        (f) Obtain T_fo and T_wo from computations
-        (g) Update T_fo,guess = (T_fo,guess + T_fo)/2 and T_wo,guess = (T_wo,guess + T_wo)/2
-        (4) Record data with fouling resistances R1, R2
-        
-        Args:
-            inputs: Dictionary with keys:
-                - 'm_dot_hot': Flue gas mass flow rate (kg/s)
-                - 'm_dot_cold': Water mass flow rate (kg/s)
-                - 'T_hot_in': Flue gas inlet temperature (T_fi) (°C)
-                - 'T_cold_in': Water inlet temperature (T_wi) (°C)
-                - 'R_f_hot': Flue gas side fouling resistance (R1) (m²·K/W)
-                - 'R_f_cold': Water side fouling resistance (R2) (m²·K/W)
-        
-        Returns:
-            Dictionary with inputs and results
-        """
-        # Step 1: Unpack inputs
-        m_dot_hot = inputs['m_dot_hot']
-        m_dot_cold = inputs['m_dot_cold']
-        T_fi = inputs['T_hot_in']  # Flue gas inlet temperature
-        T_wi = inputs['T_cold_in']  # Water inlet temperature
-        R1 = inputs['R_f_hot']  # Flue gas side fouling resistance
-        R2 = inputs['R_f_cold']  # Water side fouling resistance
-        
-        # Step 2: Initialize guess
-        T_fo_guess = T_fi - 10.0  # Initial guess for flue gas outlet (T_fo,guess <= T_fi)
-        T_fo = T_fi  # Initialize T_fo = T_fi
-        
-        iteration = 0
-        error = float('inf')
-        
-        # Step 3: Iterative solution
-        while error > TOLERANCE and iteration < MAX_ITER:
-            # (a) Evaluate flue gas properties at bulk mean temperature
-            T_flue_mean = (T_fi + T_fo_guess) / 2
-            props_flue = self.fluid_hot.get_properties(T_flue_mean)
-            
-            # (b) Compute flue-side fouling variables (Eqns 10-13)
-            res_flue = self._calc_h_flue(m_dot_hot, props_flue, R1)
-            h_flue = res_flue['h']
-            
-            # (c) Evaluate T_wo,guess from energy balance and water properties
-            # Energy balance: Q = m_hot * cp_hot * (T_fi - T_fo_guess)
-            Q_guess = m_dot_hot * props_flue['cp'] * (T_fi - T_fo_guess)
-            
-            # Estimate water outlet using inlet properties
-            props_water_in = self.fluid_cold.get_properties(T_wi)
-            T_wo_guess = T_wi + Q_guess / (m_dot_cold * props_water_in['cp'])
-            
-            # Water properties at bulk mean temperature
-            T_water_mean = (T_wi + T_wo_guess) / 2
-            props_water = self.fluid_cold.get_properties(T_water_mean)
-            
-            # (d) Determine water-side fouling variables (Eqns 4-7)
-            res_water = self._calc_h_water(m_dot_cold, props_water, R2)
-            h_water = res_water['h']
-            
-            # (e) Calculate U, NTU, epsilon
-            U = self.calc_overall_U(h_flue, h_water, R1, R2)
-            NTU = self.calc_ntu(U, m_dot_hot, props_flue['cp'], 
-                                m_dot_cold, props_water['cp'])
-            epsilon = self.calc_effectiveness(U, NTU, m_dot_hot, props_flue['cp'],
-                                             m_dot_cold, props_water['cp'])
-            
-            # (f) Obtain T_fo and T_wo from computations
-            C_h = m_dot_hot * props_flue['cp']
-            C_c = m_dot_cold * props_water['cp']
-            C_min = min(C_h, C_c)
-            
-            Q_actual = epsilon * C_min * (T_fi - T_wi)
-            T_fo = T_fi - (Q_actual / C_h)
-            T_wo = T_wi + (Q_actual / C_c)
-            
-            # (g) Update guesses using relaxation
-            T_fo_guess = (T_fo_guess + T_fo) / 2
-            T_wo_guess = (T_wo_guess + T_wo) / 2
-            
-            # Check convergence
-            error = abs(T_fo_guess - T_fo)
-            iteration += 1
-        
-        # Step 4: Record data
-        return {
-            'inputs': inputs,
-            'results': {
-                'T_hot_out': T_fo,  # T_fo
-                'T_cold_out': T_wo,  # T_wo
-                'Q_actual': Q_actual,
-                'U_overall': U,
-                'NTU': NTU,
-                'epsilon': epsilon,
-                'h_flue': h_flue,
-                'h_water': h_water,
-                'D_f_o': res_flue['D_f_o'],
-                'D_f_i': res_water['D_f_i'],
-                'V_max_f': res_flue['V_max_f'],
-                'V_f': res_water['V_f'],
-                'M_dot_flue_f': res_flue['M_dot_f'],
-                'M_dot_water_f': res_water['M_dot_f'],
-                'error': error,
-                'iteration': iteration,
-            }
-        }
 

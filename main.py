@@ -1,13 +1,54 @@
+"""
+Main Simulation Script
+
+Configurable heat exchanger simulation with support for:
+- Multiple exchanger types (PHE, CrossFlow)
+- Time column generation
+- Noise addition
+"""
 import random
 import pandas as pd
 from datetime import timedelta
-from config import RANGES, SIMULATION_START_TIME, SIMULATION_END_TIME, TIME_FORMAT
+from config import (
+    RANGES, SIMULATION_START_TIME, SIMULATION_END_TIME, TIME_FORMAT,
+    EXCHANGER_TYPE, GENERATE_TIME_COLUMN, ADD_NOISE, NOISE_LEVEL, NOISE_COLUMNS,
+    NUM_RUNS, HOURS_PER_RUN, FOULING_GROWTH_HOT, FOULING_GROWTH_COLD
+)
 from solver import Solver
+from phe_model import PlateHeatExchanger
+from crossflow_he import CrossFlowHeatExchanger
+from noise_utils import add_noise_to_dataframe
 
 
-def generate_randon_inputs():
+def create_exchanger(exchanger_type: str = None):
+    """
+    Create heat exchanger instance based on type.
+    
+    Args:
+        exchanger_type: 'PHE' or 'CROSSFLOW' (defaults to config value)
+        
+    Returns:
+        Heat exchanger instance
+    """
+    if exchanger_type is None:
+        exchanger_type = EXCHANGER_TYPE
+    
+    exchanger_type = exchanger_type.upper()
+    
+    if exchanger_type == 'PHE':
+        return PlateHeatExchanger()
+    elif exchanger_type == 'CROSSFLOW':
+        return CrossFlowHeatExchanger()
+    else:
+        raise ValueError(f"Unknown exchanger type: {exchanger_type}. Must be 'PHE' or 'CROSSFLOW'")
+
+
+def generate_random_inputs():
     """
     Step 1 from Table 2: Random Selection from Uniform Distribution
+    
+    Returns:
+        Dictionary of random inputs within configured ranges
     """
     inputs = {}
     for key, (min_val, max_val) in RANGES.items():
@@ -18,35 +59,59 @@ def generate_randon_inputs():
 def generate_random_timestamp(start_date, end_date):
     """
     Generates a random timestamp between start_date and end_date
+    
+    Args:
+        start_date: Start datetime
+        end_date: End datetime
+        
+    Returns:
+        Random timestamp between start and end
     """
     delta = end_date - start_date
     random_seconds = random.randint(0, int(delta.total_seconds()))
     return start_date + timedelta(seconds=random_seconds)
 
 
-def generate_sequential_run(solver, start_time, hours=24):
+def generate_sequential_run(solver: Solver, start_time, hours: int = None,
+                           fouling_growth_hot: tuple = None,
+                           fouling_growth_cold: tuple = None):
     """
-    Alternative generation: Simulates a continuous operation run.
-    Fouling grows linearly or asymptotically with time[cite: 119].
+    Simulates a continuous operation run with fouling growth.
+    Fouling grows linearly or asymptotically with time.
+    
+    Args:
+        solver: Solver instance
+        start_time: Starting datetime for the run
+        hours: Number of hours to simulate (defaults to config)
+        fouling_growth_hot: Tuple (min, max) for hot side fouling growth per hour
+        fouling_growth_cold: Tuple (min, max) for cold side fouling growth per hour
+        
+    Returns:
+        List of data dictionaries
     """
+    if hours is None:
+        hours = HOURS_PER_RUN
+    if fouling_growth_hot is None:
+        fouling_growth_hot = FOULING_GROWTH_HOT
+    if fouling_growth_cold is None:
+        fouling_growth_cold = FOULING_GROWTH_COLD
+    
     data_sequence = []
     current_time = start_time
-
-
-    #Initial clean conditions
+    
+    # Initial clean conditions
     current_Rf_hot = 0.0
     current_Rf_cold = 0.0
-
+    
     for i in range(hours):
-        #Generate random inputs for each hour
+        # Advance time
         current_time += timedelta(hours=1)
-
-        #Fouling Grows(Simple linear growth model for demonstration)
-        current_Rf_hot += random.uniform(0, 0.00001)  # Simulate fouling growth
-        current_Rf_cold += random.uniform(0.0, 0.000005)  # Simulate fouling growth
-
-
-        # Operational Fluctuations (Sensor Noise)
+        
+        # Fouling growth (simple linear growth model)
+        current_Rf_hot += random.uniform(*fouling_growth_hot)
+        current_Rf_cold += random.uniform(*fouling_growth_cold)
+        
+        # Operational fluctuations (sensor noise)
         # Inputs vary narrowly to simulate steady operation
         inputs = {
             'm_dot_hot': random.uniform(4.0, 4.5),
@@ -56,76 +121,158 @@ def generate_sequential_run(solver, start_time, hours=24):
             'R_f_hot': current_Rf_hot,
             'R_f_cold': current_Rf_cold,
         }
+        
         try:
             res = solver.run_simulation(inputs)
-
+            
             flat_data = {
-                'timestamp': current_time.strftime(TIME_FORMAT),
                 **res['inputs'],
                 **res['results']
             }
+            
+            # Add timestamp if configured
+            if GENERATE_TIME_COLUMN:
+                flat_data['timestamp'] = current_time.strftime(TIME_FORMAT)
+            
             data_sequence.append(flat_data)
             
         except Exception as e:
+            print(f"Simulation failed at hour {i}: {e}")
             continue
-        # Record
-        
-       
+    
     return data_sequence
 
 
-def main():
-      #Number of Simulations
-    solver = Solver()
-    all_data = []
-
-    print("Generating sequential fouling data for Transformer training...")
+def generate_random_dataset(solver: Solver, n_samples: int, with_time: bool = None):
+    """
+    Generate random dataset without sequential time dependency.
     
-    # Generate 10 separate 'runs' (e.g., 10 different maintenance cycles)
-    for run_idx in range(10):
-        # Shift start date for each run
-        run_start = SIMULATION_START_TIME + timedelta(days=run_idx*30)
+    Args:
+        solver: Solver instance
+        n_samples: Number of samples to generate
+        with_time: Whether to include timestamp (defaults to config)
         
-        # Generate 500 hours of data per run
-        run_data = generate_sequential_run(solver, run_start, hours=500)
-        all_data.extend(run_data)
-
-    # Save to CSV
-    df = pd.DataFrame(all_data)
-    df.to_csv('phe_transformer_dataset_timestamp.csv', index=False)
+    Returns:
+        List of data dictionaries
+    """
+    if with_time is None:
+        with_time = GENERATE_TIME_COLUMN
     
-    print(f"Dataset generated: phe_transformer_dataset_timestamp.csv ({len(df)} samples)")
-    print(df[['timestamp', 'R_f_hot', 'T_hot_out', 'U_overall']].head())
+    dataset = []
+    
+    for i in range(n_samples):
+        # Random input generation
+        inputs = generate_random_inputs()
+        
+        try:
+            res = solver.run_simulation(inputs)
+            
+            flat_data = {
+                **res['inputs'],
+                **res['results']
+            }
+            
+            # Add random timestamp if configured
+            if with_time:
+                timestamp = generate_random_timestamp(SIMULATION_START_TIME, SIMULATION_END_TIME)
+                flat_data['timestamp'] = timestamp.strftime(TIME_FORMAT)
+            
+            dataset.append(flat_data)
+            
+        except Exception as e:
+            print(f"Convergence failed for sample {i}: {e}")
+            continue
+    
+    return dataset
+
+
+def main(exchanger_type: str = None, with_time: bool = None, 
+         with_noise: bool = None, n_samples: int = None, 
+         sequential: bool = True, output_file: str = None):
+    """
+    Main simulation function.
+    
+    Args:
+        exchanger_type: 'PHE' or 'CROSSFLOW' (defaults to config)
+        with_time: Whether to include timestamp column (defaults to config)
+        with_noise: Whether to add noise to output (defaults to config)
+        n_samples: Number of samples for random generation (if sequential=False)
+        sequential: Whether to use sequential fouling growth (default: True)
+        output_file: Output CSV filename (default: auto-generated)
+    """
+    # Use config defaults if not provided
+    if exchanger_type is None:
+        exchanger_type = EXCHANGER_TYPE
+    if with_time is None:
+        with_time = GENERATE_TIME_COLUMN
+    if with_noise is None:
+        with_noise = ADD_NOISE
+    
+    # Create exchanger and solver
+    exchanger = create_exchanger(exchanger_type)
+    solver = Solver(exchanger)
+    
+    print(f"Generating {exchanger_type} heat exchanger simulation data...")
+    print(f"  Time column: {with_time}")
+    print(f"  Noise: {with_noise}")
+    print(f"  Sequential: {sequential}")
+    
+    all_data = []
+    
+    if sequential:
+        # Generate sequential fouling data
+        print(f"Generating {NUM_RUNS} runs of {HOURS_PER_RUN} hours each...")
+        
+        for run_idx in range(NUM_RUNS):
+            # Shift start date for each run
+            run_start = SIMULATION_START_TIME + timedelta(days=run_idx * 30)
+            
+            # Generate sequential run
+            run_data = generate_sequential_run(solver, run_start)
+            all_data.extend(run_data)
+            
+            print(f"  Run {run_idx + 1}/{NUM_RUNS}: {len(run_data)} samples")
+    else:
+        # Generate random dataset
+        if n_samples is None:
+            n_samples = NUM_RUNS * HOURS_PER_RUN
+        
+        print(f"Generating {n_samples} random samples...")
+        all_data = generate_random_dataset(solver, n_samples, with_time)
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(all_data)
+    
+    # Add noise if configured
+    if with_noise:
+        print(f"Adding noise (level: {NOISE_LEVEL})...")
+        df = add_noise_to_dataframe(df, NOISE_LEVEL, NOISE_COLUMNS)
+    
+    # Generate output filename if not provided
+    if output_file is None:
+        exchanger_suffix = exchanger_type.lower()
+        time_suffix = "_timestamp" if with_time else ""
+        noise_suffix = "_noisy" if with_noise else ""
+        output_file = f"{exchanger_suffix}_simulation_dataset{time_suffix}{noise_suffix}.csv"
+    
+    # Save to CSV
+    df.to_csv(output_file, index=False)
+    
+    print(f"\nDataset generated: {output_file} ({len(df)} samples)")
+    
+    # Display sample
+    display_cols = ['R_f_hot', 'T_hot_out', 'U_overall']
+    if with_time:
+        display_cols.insert(0, 'timestamp')
+    print(f"\nSample data:")
+    print(df[display_cols].head())
+    
+    return df
+
 
 if __name__ == "__main__":
+    # Run with config defaults
     main()
-
-
-
-
-
-# def main():
-#     N_SAMPLES =  10000  #Number of Simulations
-#     solver = Solver()
-#     dataset = []
-
-#     print(f"Generating {N_SAMPLES} random input sets...")
-
-#     for i in range(N_SAMPLES):
-#         #1. Random Input Generation
-#         inp = generate_randon_inputs()
-
-#         #2. Run Iterative Solver
-#         try: 
-#             data_point = solver.run_simulation(inp)
-
-#             #Flatten structure for CSV
-#             flat_data = {**data_point['inputs'], **data_point['results']}
-#             dataset.append(flat_data)
-#         except Exception as e:
-#             print(f"Covergence failed for sample {i}: {e}")
     
-#     df = pd.DataFrame(dataset)
-#     df.to_csv('phe_simulation_dataset.csv', index=False)
-#     print(f"Dataset saved to phe_simulation_dataset.csv with {len(dataset)} samples")
-#     print(df.head())
+    # Example: Run with custom parameters
+    # main(exchanger_type='CROSSFLOW', with_time=True, with_noise=True, sequential=False, n_samples=1000)

@@ -1,0 +1,6 @@
+.cursor/
+.vscode/
+.env
+.qodo/
+__pycache__/
+.mypy_cache/
