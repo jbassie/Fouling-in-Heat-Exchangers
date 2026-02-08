@@ -1,0 +1,575 @@
+---
+description: Core rules for data-platform-classification repository
+globs:
+alwaysApply: true
+---
+
+## Operating Modes
+
+You have two modes of operation:
+
+1. **Plan Mode** - Work with the user to define a plan. Gather information but make no changes.
+2. **Act Mode** - Execute changes based on the approved plan.
+
+**Mode Rules:**
+- Always start in **PLAN** mode
+- Print `# Mode: PLAN` or `# Mode: ACT` at the beginning of each response
+- Move to ACT mode only when user types `ACT`
+- Return to PLAN mode after every response or when user types `PLAN`
+- In PLAN mode, always output the full updated plan in every response
+- If user requests action in PLAN mode, remind them to approve the plan first
+
+---
+
+## Core Coding Philosophy
+
+### **Pragmatic Over Perfect**
+- Write simple, maintainable code that solves the problem
+- **YAGNI** (You Aren't Gonna Need It) - Don't build for hypothetical future needs
+- **KISS** (Keep It Simple, Stupid) - Simplicity beats cleverness
+- Avoid over-engineering and unnecessary abstractions
+
+### **Functions vs Classes**
+- **Prefer simple functions** over classes when possible
+- Use classes only when you need:
+  - State management across multiple operations
+  - Inheritance/polymorphism
+  - Dagster Config classes (required by framework)
+- **Never** use classes just to group static methods - use module-level functions instead
+
+### **Data Passing Principles**
+- 🚨 **CRITICAL RULE:** Don't use context for util functions unless unavoidable
+- **Never pass entire context objects to helper/utility functions**
+- Pass only the specific data the function needs (primitive types, dicts, specific data objects)
+- This makes functions testable, reusable, and easier to understand
+- Context objects should only be used in sensor functions themselves
+
+**Examples:**
+```python
+# ❌ BAD - passes entire context to utility function
+def extract_failure_details(context: RunFailureSensorContext) -> str:
+    failure_data = context.failure_event.event_specific_data
+    ...
+
+def should_skip_alert(context: RunFailureSensorContext) -> Optional[SkipReason]:
+    job_name = context.dagster_run.job_name
+    ...
+
+# ✅ GOOD - passes only needed data
+def extract_failure_details(failure_data: EventSpecificData) -> str:
+    ...
+
+def should_skip_alert(job_name: str, upload_id: Optional[str], failure_data: EventSpecificData, run_id: str) -> Optional[SkipReason]:
+    ...
+```
+
+**When context is unavoidable:**
+- Only in top-level sensor functions (decorators require it)
+- When you need to access Dagster instance methods directly
+- Extract data from context immediately and pass to utility functions
+
+---
+
+## SOLID Principles (Applied Pragmatically)
+
+Apply SOLID where it adds value, not dogmatically:
+
+1. **Single Responsibility Principle (SRP)**
+   - One function/class = one clear purpose
+   - Apply at both function and module level
+   - Break large files into focused modules (see File Structure below)
+
+2. **Open/Closed Principle (OCP)**
+   - Make code extensible without modifying existing code
+   - Use when you expect variation (e.g., multiple strategies)
+   - Don't apply prematurely for one-off logic
+
+3. **Liskov Substitution Principle (LSP)**
+   - Subclasses must work wherever parent works
+   - Only relevant when using inheritance (which should be rare)
+
+4. **Interface Segregation Principle (ISP)**
+   - Keep interfaces/protocols small and focused
+   - Don't force implementations to handle unused methods
+
+5. **Dependency Inversion Principle (DIP)**
+   - Depend on abstractions, not concrete implementations
+   - Apply when you need swappable implementations
+   - Don't create abstractions for single implementations
+
+---
+
+## Design Patterns (Use Sparingly)
+
+**Only use patterns when they genuinely simplify the code.**
+
+### When to Use Patterns:
+- **Factory Method** - When object creation is complex or varies
+- **Strategy Pattern** - When you have multiple algorithms/approaches that need to be swappable
+- **Builder Pattern** - When constructing complex objects with many optional parameters
+
+### When NOT to Use Patterns:
+- ❌ Don't use Strategy pattern for simple if/else logic
+- ❌ Don't use Builder pattern for objects with 2-3 parameters
+- ❌ Don't use Singleton - use dependency injection instead
+- ❌ Don't create class hierarchies when a few functions will do
+
+**Example of over-engineering to avoid:**
+```python
+# ❌ BAD - Unnecessary abstraction
+class AlertSkipStrategy(Protocol):
+    def should_skip(self, context) -> SkipReason: ...
+
+class TeamsJobSkipStrategy(AlertSkipStrategy): ...
+class MissingFailureDataSkipStrategy(AlertSkipStrategy): ...
+
+# ✅ GOOD - Simple function
+def should_skip_alert(job_name, upload_id, failure_data, run_id):
+    if upload_id is None:
+        return SkipReason(...)
+    if job_name == "teams_job":
+        return SkipReason(...)
+    return None
+```
+
+---
+
+## File Structure & Organization
+
+### File Length Limits:
+- **Target:** < 200 lines per file
+- **Maximum:** < 500 lines per file
+- **Never exceed:** 1000 lines (unacceptable)
+
+### Module Organization:
+When a file grows large, break it into focused modules by **responsibility**, not by pattern:
+
+**Good module names (describe what they do):**
+- `failure_alert_processing.py` - All failure alert functions
+- `run_concurrency.py` - Concurrency checking and management
+- `run_config_utils.py` - Building and validating run configs
+- `sensor_configs.py` - Pydantic Config classes only
+
+**Bad module names (too generic):**
+- ❌ `helpers.py` - Too vague
+- ❌ `utils.py` - Dump for everything
+- ❌ `base.py` - Abstract nonsense
+
+### File Structure Example:
+```
+utils/
+  sensor_utils/
+    ├── sensor_configs.py          # Config classes (50 lines)
+    ├── run_config_utils.py        # Config building (100 lines)
+    ├── run_concurrency.py         # Concurrency checks (60 lines)
+    ├── failure_alert_processing.py # Failure logic (100 lines)
+    └── sensor_run_request.py      # Run requests (75 lines)
+```
+
+---
+
+## Code Quality Standards
+
+### Type Hints:
+- ✅ Always provide complete type hints on all functions
+- ✅ Use `Optional[T]` instead of `Union[T, None]`
+- ✅ Type hint function parameters and return values
+
+### Docstrings:
+- ✅ Every function needs a docstring
+- ✅ Format:
+  ```python
+  def my_function(param: str) -> int:
+      """Brief description of what the function does.
+
+      Args:
+          param: Description of parameter
+
+      Returns:
+          Description of return value
+
+      Raises:
+          ValueError: When this error occurs
+      """
+  ```
+
+### Function Length:
+- **Target:** 15-20 lines
+- **Maximum:** 40 lines
+- If longer, break into helper functions
+
+### Naming:
+- Functions: `verb_noun()` - `extract_failure_details()`, `validate_config_value()`
+- Classes: `NounPhrase` - `ConfigValidator`, `MessageProcessor`
+- Modules: `noun_description.py` - `run_concurrency.py`, `failure_alert_processing.py`
+- Be descriptive - avoid vague names like `data`, `helper`, `temp`, `info`
+
+---
+
+## Python-Specific Guidelines
+
+### Prefer Functions:
+```python
+# ✅ GOOD - Module-level functions
+def get_error_message(message: str, job_name: str) -> str:
+    if not message:
+        return f"Job '{job_name}' failed for unknown reason."
+    return message
+
+def get_cancellation_message(job_name: str, run_id: str) -> str:
+    return f"Job '{job_name}' with run_id '{run_id}' was canceled."
+```
+
+```python
+# ❌ BAD - Unnecessary class
+class ErrorHandler:
+    @staticmethod
+    def get_error_message(message: str, job_name: str) -> str:
+        ...
+
+    @staticmethod
+    def get_cancellation_message(job_name: str, run_id: str) -> str:
+        ...
+```
+
+### Validation:
+```python
+# ✅ GOOD - Simple inline validation
+def construct_config(properties: Dict, upload_id: str) -> RunConfig:
+    allowed = load_allowed_values()
+    if properties["scope"] not in allowed["scope"]:
+        raise ValueError(f"Invalid scope: {properties['scope']}")
+    return RunConfig(...)
+```
+
+```python
+# ❌ BAD - Over-engineered validator class
+class ConfigValidator:
+    def __init__(self, allowed_values): ...
+    def validate_scope(self, scope): ...
+    def validate_strategy(self, strategy): ...
+    @classmethod
+    def from_config(cls): ...
+```
+
+---
+
+## Testing Guidelines
+
+### **🚨 CRITICAL: Look at Existing Tests First**
+- ✅ **ALWAYS** examine similar test files in the codebase before writing new tests
+- ✅ Match the style and simplicity of existing tests in the project
+- ❌ **NEVER** import testing patterns from other projects or generic "best practices" guides
+- ❌ **NEVER** use test classes unless the existing codebase uses them
+
+**First step when writing tests:** Find a similar test file and copy its style.
+
+---
+
+### **Keep Tests Simple (KISS Applies Here Too)**
+- ✅ Write flat, individual test functions
+- ✅ Use inline test data instead of fixtures when data is only used once or twice
+- ✅ Test function names should be descriptive - no need for verbose docstrings
+- ✅ Use `@pytest.mark.parametrize` to combine similar test cases
+- ❌ Don't create test classes just to group tests
+- ❌ Don't create elaborate test hierarchies or base classes
+- ❌ Don't write docstrings that just repeat the test function name
+
+**Examples:**
+```python
+# ✅ GOOD - Simple, flat, clear
+@pytest.mark.parametrize("value, allowed, should_raise", [
+    ("full", ["full", "delta"], False),
+    ("invalid", ["full", "delta"], True),
+])
+def test_validate_config_value(value, allowed, should_raise):
+    if should_raise:
+        with pytest.raises(ValueError) as exc:
+            validate_config_value(value, allowed, "field")
+        assert "field" in str(exc.value)
+    else:
+        validate_config_value(value, allowed, "field")
+
+# ❌ BAD - Over-engineered with unnecessary class
+class TestValidateConfigValue:
+    """Tests for validate_config_value function."""
+
+    def test_valid_value_no_exception(self) -> None:
+        """Test that valid value does not raise an exception."""
+        allowed_values = ["full", "incremental", "delta"]
+        validate_config_value("full", allowed_values, "upload_scope")
+
+    def test_invalid_value_raises_value_error(self) -> None:
+        """Test that invalid value raises ValueError."""
+        allowed_values = ["full", "incremental", "delta"]
+        with pytest.raises(ValueError):
+            validate_config_value("invalid", allowed_values, "upload_scope")
+```
+
+---
+
+### **Test Organization**
+- ✅ One test file per source file: `src/utils/foo.py` → `tests/utils/test_foo.py`
+- ✅ Test files mirror source structure exactly
+- ✅ Keep test files small (< 200 lines ideal, < 300 lines max)
+- ❌ Don't create test base classes, helpers, or utilities unless absolutely necessary
+- ❌ Don't create shared test fixtures across files (use conftest.py only for project-wide fixtures)
+
+**Test Directory Structure:**
+```
+tests/
+  utils/
+    sensor_processing/
+      ├── test_run_concurrency.py
+      ├── test_failure_alert_processing.py
+      └── test_sensor_run_request.py
+```
+
+---
+
+### **Fixtures: Use Sparingly**
+- ✅ Use fixtures **only** when the same data is used in 3+ tests
+- ✅ Keep fixtures simple - return plain dicts/objects
+- ✅ Define fixtures in the same file as the tests (unless project-wide)
+- ❌ Don't create fixtures "just in case" - wait until you have actual duplication
+- ❌ Don't create fixture hierarchies or dependencies
+- ❌ Don't create fixtures with complex setup logic
+
+**Example:**
+```python
+# ✅ GOOD - Inline data, no fixture needed
+def test_construct_config(mocker):
+    mocker.patch("module.load_allowed_values", return_value={"scope": ["full"]})
+    result = construct_config({"scope": "full"}, "upload_123")
+    assert result is not None
+
+# ❌ BAD - Unnecessary fixture for one-time use
+@pytest.fixture
+def valid_allowed_values():
+    """Returns valid allowed values config."""
+    return {"upload_scope": ["full", "incremental", "delta"]}
+
+def test_construct_config(mocker, valid_allowed_values):
+    mocker.patch("module.load_allowed_values", return_value=valid_allowed_values)
+    # ...
+```
+
+---
+
+### **What to Test**
+- ✅ Test the happy path (success case)
+- ✅ Test error conditions (exceptions, validation failures)
+- ✅ Test edge cases that matter to the business logic
+- ❌ Don't test every possible permutation
+- ❌ Don't test framework functionality (Dagster, pytest, etc.)
+- ❌ Don't test trivial getters/setters
+- ❌ Don't test private methods directly
+
+---
+
+### **Test Length**
+- **Target:** 5-15 lines per test
+- **Maximum:** 30 lines per test
+- If longer, you're probably testing too much in one test - split it up
+
+---
+
+### **Mocking**
+- ✅ Mock external dependencies (APIs, databases, file I/O, config loaders)
+- ✅ Use `mocker.patch()` with full import path
+- ✅ Mock at the boundary (where your code calls external code)
+- ❌ Don't mock the function you're testing
+- ❌ Don't create elaborate mock hierarchies
+- ❌ Don't mock everything - test real logic
+
+**Example:**
+```python
+# ✅ GOOD - Mock external dependency
+def test_construct_config(mocker):
+    mocker.patch("module.load_allowed_values", return_value={"scope": ["full"]})
+    result = construct_config({"scope": "full"}, "id")
+    assert result.resources["config_resource"]["config"]["scope"] == "full"
+
+# ❌ BAD - Over-mocking
+def test_construct_config(mocker):
+    mock_allowed = mocker.Mock()
+    mock_allowed.get.return_value = ["full"]
+    mock_loader = mocker.Mock(return_value=mock_allowed)
+    mocker.patch("module.load_allowed_values", mock_loader)
+    # ... too complex
+```
+
+---
+
+### **Assertions**
+- ✅ Use simple, direct assertions
+- ✅ One primary assertion per test (supporting assertions are OK)
+- ✅ Assert on behavior, not implementation details
+- ❌ Don't use multiple unrelated assertions in one test
+- ❌ Don't assert on internal state unless necessary
+
+---
+
+### **Complete Test File Example**
+```python
+# test_sensor_utils.py - Simple, pragmatic, matches codebase style
+
+import pytest
+from pytest_mock import MockerFixture
+
+from module import validate_value, construct_config, process_request
+
+
+@pytest.mark.parametrize("value, allowed, should_raise", [
+    ("full", ["full", "delta"], False),
+    ("invalid", ["full", "delta"], True),
+])
+def test_validate_value(value, allowed, should_raise):
+    if should_raise:
+        with pytest.raises(ValueError) as exc:
+            validate_value(value, allowed, "field")
+        assert "field" in str(exc.value)
+    else:
+        validate_value(value, allowed, "field")
+
+
+def test_construct_config_success(mocker: MockerFixture):
+    mocker.patch("module.load_allowed_values", return_value={"scope": ["full"]})
+
+    result = construct_config({"scope": "full"}, "upload_123")
+
+    assert result["upload_id"] == "upload_123"
+    assert result["scope"] == "full"
+
+
+def test_construct_config_invalid_scope(mocker: MockerFixture):
+    mocker.patch("module.load_allowed_values", return_value={"scope": ["full"]})
+
+    with pytest.raises(ValueError) as exc:
+        construct_config({"scope": "invalid"}, "upload_123")
+
+    assert "scope" in str(exc.value)
+
+
+@pytest.mark.parametrize("job_name", [
+    "job_success_send_message",
+    "job_failure_send_message",
+])
+def test_process_request_skips_excluded_jobs(job_name):
+    result = process_request(job_name, "run_123", {})
+    assert isinstance(result, SkipReason)
+
+
+def test_process_request_creates_request():
+    result = process_request("normal_job", "run_123", {"config": "data"})
+
+    assert isinstance(result, RunRequest)
+    assert result.run_key == "run_123"
+```
+
+---
+
+### **Testing Checklist (Use Before Submitting)**
+
+Before finalizing tests, ask yourself:
+
+1. ✅ Did I look at similar tests in the codebase first?
+2. ✅ Are my tests flat functions (not classes)?
+3. ✅ Am I using `@pytest.mark.parametrize` for similar cases?
+4. ✅ Is test data inline (not in fixtures unless reused 3+ times)?
+5. ✅ Are test names clear without needing docstrings?
+6. ✅ Am I testing behavior, not implementation?
+7. ✅ Is each test under 30 lines?
+8. ✅ Am I mocking only external dependencies?
+9. ✅ Does the test file match the style of existing tests?
+
+---
+
+### **Write Testable Production Code**
+- ✅ Functions with clear inputs/outputs are easy to test
+- ✅ Pass specific data (primitives, dicts) not context objects
+- ✅ Avoid side effects where possible
+- ✅ Inject dependencies rather than importing them internally
+- ❌ Don't create code that requires complex test setup
+
+---
+
+## Code Review Checklist
+
+### **Production Code Review**
+
+When reviewing production code, check:
+
+1. 🚨 **No Context in Utils** - Are utility functions receiving context objects? They shouldn't!
+2. ✅ **Simplicity** - Could this be simpler? Is it over-engineered?
+3. ✅ **Focused Functions** - Does each function do one thing?
+4. ✅ **Data Passing** - Are we passing only needed data (primitives, dicts), not whole contexts?
+5. ✅ **File Size** - Is the file under 200 lines? Should we split it?
+6. ✅ **Type Hints** - Are all functions properly typed?
+7. ✅ **Docstrings** - Does every function have a clear docstring?
+8. ✅ **Naming** - Are names descriptive and clear?
+9. ✅ **Testability** - Can this be easily unit tested?
+10. ✅ **No Classes with Only Static Methods** - Convert to functions
+11. ✅ **YAGNI** - Is this code actually needed, or preparing for hypothetical futures?
+
+### **Test Code Review**
+
+When reviewing tests, check:
+
+1. 🚨 **Existing Style** - Does it match the style of other tests in the codebase?
+2. ✅ **No Test Classes** - Are tests flat functions (unless codebase uses classes)?
+3. ✅ **Parametrize** - Are similar tests combined with `@pytest.mark.parametrize`?
+4. ✅ **Inline Data** - Is test data inline instead of in fixtures (unless reused 3+ times)?
+5. ✅ **No Verbose Docstrings** - Are docstrings omitted when test names are clear?
+6. ✅ **Test Length** - Is each test under 30 lines?
+7. ✅ **Simplicity** - Could the test be simpler? Is it over-engineered?
+8. ✅ **Mock Appropriately** - Are only external dependencies mocked?
+9. ✅ **File Size** - Is the test file under 300 lines?
+
+---
+
+## Common Patterns in This Codebase
+
+### Sensor Processing:
+- Sensors trigger jobs based on Service Bus messages
+- Status sensors (success/failure/cancelled) send completion messages
+- Concurrency limits prevent overload
+
+### Configuration:
+- Dagster Config classes (required by framework) for op/job configuration
+- RunConfig objects constructed with validation
+- Logger config attached to runs for tracking
+
+### Error Handling:
+- Extract only needed data from contexts
+- Build clear, actionable error messages
+- Skip conditions use SkipReason with explanatory messages
+
+---
+
+## Operational Rules
+
+- **Code reviews** output to chat, never to files (unless explicitly requested)
+- **Plan reviews** always show full plan in PLAN mode
+- **Incremental changes** - make small, focused changes
+- **Test after changes** - check for linter errors
+- **Document decisions** - explain "why" in comments when non-obvious
+
+---
+
+## Remember: Pragmatic > Perfect
+
+> "Simplicity is the ultimate sophistication." - Leonardo da Vinci
+
+Write code that:
+- ✅ Solves the problem clearly
+- ✅ Is easy to understand and modify
+- ✅ Can be tested easily (utility functions take simple params, not contexts)
+- ✅ Doesn't need extensive documentation to understand
+
+Avoid code that:
+- ❌ Shows off design pattern knowledge
+- ❌ Prepares for every possible future scenario
+- ❌ Creates abstraction layers without clear benefit
+- ❌ Requires a PhD to understand
+- ❌ **Passes context objects to utility functions** (most important!)
