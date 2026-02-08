@@ -10,7 +10,7 @@ This class implements a cross-flow heat exchanger model following the algorithm:
 import numpy as np
 from config import K_PLATE
 from fluids import FluidProperties
-from base_model import BaseHeatExchanger
+from models.base_model import BaseHeatExchanger
 
 
 class CrossFlowHeatExchanger(BaseHeatExchanger):

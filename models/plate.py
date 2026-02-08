@@ -5,7 +5,7 @@ This model is based on the literature and the geometry of the PHE.
 """
 import numpy as np
 from config import K_DEPOSIT, K_PLATE
-from base_model import BaseHeatExchanger
+from models.base_model import BaseHeatExchanger
 
 class PlateHeatExchanger(BaseHeatExchanger):
     def __init__(self):

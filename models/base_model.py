@@ -5,7 +5,7 @@ Provides common functionality shared between different heat exchanger types.
 Implements DRY principle by centralizing shared methods.
 """
 from abc import ABC, abstractmethod
-from ..config import K_DEPOSIT, K_PLATE
+from config import K_DEPOSIT, K_PLATE
 
 
 class BaseHeatExchanger(ABC):

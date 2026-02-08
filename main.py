@@ -8,16 +8,16 @@ Configurable heat exchanger simulation with support for:
 """
 import random
 import pandas as pd
-from datetime import timedelta
+from datetime import timedelta, datetime
 from config import (
     RANGES, SIMULATION_START_TIME, SIMULATION_END_TIME, TIME_FORMAT,
-    EXCHANGER_TYPE, GENERATE_TIME_COLUMN, ADD_NOISE, NOISE_LEVEL, NOISE_COLUMNS,
+    EXCHANGER_TYPE, GENERATE_TIME_COLUMN, ADD_NOISE, NOISE_LEVEL, PERCENTAGE_NOISE, NOISE_COLUMNS,
     NUM_RUNS, HOURS_PER_RUN, FOULING_GROWTH_HOT, FOULING_GROWTH_COLD
 )
 from solver import Solver
-from phe_model import PlateHeatExchanger
-from crossflow_he import CrossFlowHeatExchanger
-from noise_utils import add_noise_to_dataframe
+from models.plate import PlateHeatExchanger
+from models.crossflow import CrossFlowHeatExchanger
+from utils.noise import add_noise_to_dataframe
 
 
 def create_exchanger(exchanger_type: str = None):
@@ -74,7 +74,8 @@ def generate_random_timestamp(start_date, end_date):
 
 def generate_sequential_run(solver: Solver, start_time, hours: int = None,
                            fouling_growth_hot: tuple = None,
-                           fouling_growth_cold: tuple = None):
+                           fouling_growth_cold: tuple = None,
+                           run_id: int = None, end_time: datetime = None):
     """
     Simulates a continuous operation run with fouling growth.
     Fouling grows linearly or asymptotically with time.
@@ -85,6 +86,8 @@ def generate_sequential_run(solver: Solver, start_time, hours: int = None,
         hours: Number of hours to simulate (defaults to config)
         fouling_growth_hot: Tuple (min, max) for hot side fouling growth per hour
         fouling_growth_cold: Tuple (min, max) for cold side fouling growth per hour
+        run_id: Optional run identifier to track which run produced each row
+        end_time: Optional end datetime - run will stop if current_time exceeds this
         
     Returns:
         List of data dictionaries
@@ -106,6 +109,10 @@ def generate_sequential_run(solver: Solver, start_time, hours: int = None,
     for i in range(hours):
         # Advance time
         current_time += timedelta(hours=1)
+        
+        # Stop if we've exceeded the end time
+        if end_time is not None and current_time > end_time:
+            break
         
         # Fouling growth (simple linear growth model)
         current_Rf_hot += random.uniform(*fouling_growth_hot)
@@ -133,6 +140,10 @@ def generate_sequential_run(solver: Solver, start_time, hours: int = None,
             # Add timestamp if configured
             if GENERATE_TIME_COLUMN:
                 flat_data['timestamp'] = current_time.strftime(TIME_FORMAT)
+            
+            # Add run_id if provided
+            if run_id is not None:
+                flat_data['run_id'] = run_id
             
             data_sequence.append(flat_data)
             
@@ -221,17 +232,37 @@ def main(exchanger_type: str = None, with_time: bool = None,
     
     if sequential:
         # Generate sequential fouling data
+        total_hours_needed = NUM_RUNS * HOURS_PER_RUN
+        available_hours = int((SIMULATION_END_TIME - SIMULATION_START_TIME).total_seconds() / 3600)
+        
         print(f"Generating {NUM_RUNS} runs of {HOURS_PER_RUN} hours each...")
+        print(f"  Total hours needed: {total_hours_needed}")
+        print(f"  Available hours in date range: {available_hours}")
+        
+        if total_hours_needed > available_hours:
+            print(f"  WARNING: Requested {total_hours_needed} hours but only {available_hours} hours available.")
+            print(f"  Runs will be truncated at {SIMULATION_END_TIME.strftime(TIME_FORMAT)}")
         
         for run_idx in range(NUM_RUNS):
-            # Shift start date for each run
-            run_start = SIMULATION_START_TIME + timedelta(days=run_idx * 30)
+            # Shift start date for each run by HOURS_PER_RUN to prevent overlap
+            # Each run lasts HOURS_PER_RUN hours, so space them accordingly
+            run_start = SIMULATION_START_TIME + timedelta(hours=run_idx * HOURS_PER_RUN)
             
-            # Generate sequential run
-            run_data = generate_sequential_run(solver, run_start)
+            # Skip runs that start after the end time
+            if run_start >= SIMULATION_END_TIME:
+                print(f"  Run {run_idx + 1}/{NUM_RUNS}: Skipped (starts after end time)")
+                continue
+            
+            # Generate sequential run with run_id and end_time constraint
+            run_data = generate_sequential_run(solver, run_start, run_id=run_idx, end_time=SIMULATION_END_TIME)
             all_data.extend(run_data)
             
-            print(f"  Run {run_idx + 1}/{NUM_RUNS}: {len(run_data)} samples")
+            actual_hours = len(run_data)
+            expected_hours = HOURS_PER_RUN
+            if actual_hours < expected_hours:
+                print(f"  Run {run_idx + 1}/{NUM_RUNS}: {actual_hours} samples (truncated from {expected_hours}, start: {run_start.strftime(TIME_FORMAT)})")
+            else:
+                print(f"  Run {run_idx + 1}/{NUM_RUNS}: {actual_hours} samples (start: {run_start.strftime(TIME_FORMAT)})")
     else:
         # Generate random dataset
         if n_samples is None:
@@ -245,15 +276,15 @@ def main(exchanger_type: str = None, with_time: bool = None,
     
     # Add noise if configured
     if with_noise:
-        print(f"Adding noise (level: {NOISE_LEVEL})...")
-        df = add_noise_to_dataframe(df, NOISE_LEVEL, NOISE_COLUMNS)
+        print(f"Adding noise ({PERCENTAGE_NOISE*100:.1f}% of rows, level: {NOISE_LEVEL*100:.1f}% std dev)...")
+        df = add_noise_to_dataframe(df, noise_level=NOISE_LEVEL, percentage_noise=PERCENTAGE_NOISE, noise_columns=NOISE_COLUMNS)
     
     # Generate output filename if not provided
     if output_file is None:
         exchanger_suffix = exchanger_type.lower()
-        time_suffix = "_timestamp" if with_time else ""
+        time_suffix = "_timestamp_" + datetime.now().strftime("%Y%m%d_%H%M%S") if with_time else ""
         noise_suffix = "_noisy" if with_noise else ""
-        output_file = f"{exchanger_suffix}_simulation_dataset{time_suffix}{noise_suffix}.csv"
+        output_file = f"data/{exchanger_suffix}_simulation_dataset{time_suffix}{noise_suffix}.csv"
     
     # Save to CSV
     df.to_csv(output_file, index=False)
