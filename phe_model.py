@@ -12,9 +12,18 @@ class PlateHeatExchanger:
        self.lengthOfPlate = 1.0               #Length of plate (m)
        self.widthofPlate = 0.5               #Width of plate (m)
        self.spacingBetweenPlates = 0.003     #Spacing/Gap between plates (m) - Very narrow!
-       self.chevronAngle = 60                  #Chevron angle (degrees)
+       self.chevronAngle = 60                #Chevron angle (degrees)
        self.numberOfPlates= 50              #Total number of channels
-       self.plateThickness = 0.0006                    #Plate thickness (m)
+       self.plateThickness = 0.0006          #Plate thickness (m)
+       self.passes_hot = 1                   #Number of passes on hot side
+       self.passes_cold = 1                  #Number of passes on cold side
+
+
+        # --- Channel asymmetry (VERY IMPORTANT) ---
+        # Cold side typically has more channels in heating applications
+        # This is because the cold side is the side that is being heated
+       self.channels_hot = int(0.45 * self.numberOfPlates)
+       self.channels_cold = self.numberOfPlates - self.channels_hot
 
     def _calc_hydraulic_diameter(self, fouling_thickness):
         """
@@ -35,7 +44,7 @@ class PlateHeatExchanger:
 
         return 0.724 * (Re ** 0.583) * (Pr ** 0.333)
     
-    def _calculate_side_physics(self, m_dot, props, Rf):
+    def _calculate_side_physics(self, m_dot, props, Rf, side):
         """
         Computes velocity, Reynolds, and Heat Transfer Coefficient (h) 
         Corresponds to the 3b(Hot) and 3d(Cold) in Table 2
@@ -54,16 +63,33 @@ class PlateHeatExchanger:
         b_eff_unfouled = self.spacingBetweenPlates
         Dh_eff = 2 * b_eff_unfouled
 
+        # --- Channel count asymmetry ---
+        if side == "hot":
+            channels = self.channels_hot
+            passes = self.passes_hot
+            chevron_exp = 0.60   # slightly weaker mixing
+        else:
+            channels = self.channels_cold
+            passes = self.passes_cold
+            chevron_exp = 0.70   # stronger mixing on cold side
+
+            # --- Pass-number effect ---
+            # Fewer parallel channels per pass → higher velocity
+        channels_per_pass = channels / passes
+
+            # --- Flow area ---
+        flow_area = self.widthofPlate * b_eff_unfouled * channels_per_pass
+
         #3 Hydrodynamics
         # In a PHE, channels alternate between hot and cold sides
-        # If numberOfPlates is total channels, each side uses half
-        channels_per_side = self.numberOfPlates / 2
-        flow_area = self.widthofPlate * b_eff_unfouled * channels_per_side
+       
         velocity  = m_dot / (props['rho'] * flow_area)
         Re = (props['rho'] * velocity * Dh_eff) / props['mu']
 
+        chevron_factor = np.sin(np.radians(self.chevronAngle)) ** chevron_exp
+
         #4 Heat Transfer Coefficient
-        Nu = self._calc_nusselt(Re, props['pr'])
+        Nu = chevron_factor * self._calc_nusselt(Re, props['pr'])
         h = (Nu * props['k']) / Dh_eff
 
         return {
@@ -110,3 +136,66 @@ class PlateHeatExchanger:
             epsilon = NTU / (1 + NTU)
 
         return epsilon, C_min, C_h, C_c
+
+
+    def calc_phe_effectiveness(
+        self,
+        U,
+        m_dot_hot, cp_hot,
+        m_dot_cold, cp_cold,
+        Rf_hot, Rf_cold,
+        chevron_angle,
+        maldistribution_factor=0.85
+    ):
+        """
+            PHE-specific effectiveness–NTU formulation accounting for:
+            - Channel imbalance
+            - Fouling contact resistance
+            - Chevron angle degradation
+            - Maldistribution
+            - Plate conduction
+        """
+
+        # --- Heat capacity rates ---
+        C_h = m_dot_hot * cp_hot
+        C_c = m_dot_cold * cp_cold
+        C_min = min(C_h, C_c)
+        C_max = max(C_h, C_c)
+        C_r = C_min / C_max
+
+        # --- Effective heat transfer area ---
+        A_total = self.lengthOfPlate * self.widthofPlate * (self.numberOfPlates * 2)
+
+        # --- Plate conduction resistance (non-negligible!) ---
+        R_plate = self.plateThickness / K_PLATE
+
+        # --- Fouling-induced contact degradation ---
+        fouling_penalty = 1.0 / (1.0 + 5.0 * (Rf_hot + Rf_cold))
+
+        # --- Chevron angle effectiveness factor ---
+        # Optimal mixing around 60°
+        chevron_factor = np.sin(np.radians(chevron_angle)) ** 0.7
+
+        # --- Effective NTU ---
+        NTU_eff = (
+            U * A_total / C_min
+            * chevron_factor
+            * maldistribution_factor
+            * fouling_penalty
+            / (1.0 + R_plate * U)
+        )
+
+        # --- PHE mixed-flow effectiveness correlation ---
+        # Literature-supported approximation for multi-pass PHEs
+        if C_r < 1:
+            epsilon = (
+                1
+                - np.exp(-NTU_eff * (1 - C_r))
+            ) / (
+                1
+                - C_r * np.exp(-NTU_eff * (1 - C_r))
+            )
+        else:
+            epsilon = NTU_eff / (1 + NTU_eff)
+
+        return epsilon, NTU_eff, C_min, C_h, C_c
