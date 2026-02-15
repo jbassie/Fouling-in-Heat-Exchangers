@@ -12,12 +12,14 @@ from datetime import timedelta, datetime
 from config import (
     RANGES, SIMULATION_START_TIME, SIMULATION_END_TIME, TIME_FORMAT,
     EXCHANGER_TYPE, GENERATE_TIME_COLUMN, ADD_NOISE, NOISE_LEVEL, PERCENTAGE_NOISE, NOISE_COLUMNS,
-    NUM_RUNS, HOURS_PER_RUN, FOULING_GROWTH_HOT, FOULING_GROWTH_COLD
+    NUM_RUNS, HOURS_PER_RUN, FOULING_GROWTH_HOT, FOULING_GROWTH_COLD, BASE_NOISE_LEVEL, RANDOM_SEED,
+    TAU_COLD, TAU_HOT
 )
 from solver import Solver
 from models.plate import PlateHeatExchanger
 from models.crossflow import CrossFlowHeatExchanger
-from utils.noise import add_noise_to_dataframe
+from utils.noise import add_noise_to_dataframe, NoiseInjector
+from utils.growth import fouling_growth_model
 
 
 def create_exchanger(exchanger_type: str = None):
@@ -115,14 +117,33 @@ def generate_sequential_run(solver: Solver, start_time, hours: int = None,
             break
         
         # Fouling growth (simple linear growth model)
-        current_Rf_hot += random.uniform(*fouling_growth_hot)
-        current_Rf_cold += random.uniform(*fouling_growth_cold)
+        current_Rf_hot  = fouling_growth_model(
+                        current_Rf=current_Rf_hot,
+                        growth_type="asymptotic" if EXCHANGER_TYPE == 'PHE' else "linear",
+                        growth_rate_range=(1e-6, 3e-6),
+                        Rf_max=max(RANGES['R_f_hot']),
+                        tau=TAU_HOT,
+                    )
+        current_Rf_cold = fouling_growth_model(
+                current_Rf=current_Rf_cold,
+                growth_type="asymptotic" if EXCHANGER_TYPE == 'PHE' else "linear",
+                growth_rate_range=(1e-6, 4e-6),
+                Rf_max=max(RANGES['R_f_cold']),
+                tau=TAU_COLD,
+            )
         
+        # AR(1)-style drift in mass flow rates to simulate operational fluctuations
+        if i == 0:
+            m_hot = random.uniform(4.0, 4.5)
+            m_cold = random.uniform(2.0, 2.5)
+        else:
+            m_hot += random.uniform(-0.02, 0.02)
+            m_cold += random.uniform(-0.02, 0.02)
         # Operational fluctuations (sensor noise)
         # Inputs vary narrowly to simulate steady operation
         inputs = {
-            'm_dot_hot': random.uniform(4.0, 4.5),
-            'm_dot_cold': random.uniform(2.0, 2.5),
+            'm_dot_hot': random.uniform(4.0, m_hot),
+            'm_dot_cold': random.uniform(2.0, m_cold),
             'T_hot_in': random.uniform(195, 205),
             'T_cold_in': random.uniform(20, 25),
             'R_f_hot': current_Rf_hot,
@@ -277,8 +298,16 @@ def main(exchanger_type: str = None, with_time: bool = None,
     # Add noise if configured
     if with_noise:
         print(f"Adding noise ({PERCENTAGE_NOISE*100:.1f}% of rows, level: {NOISE_LEVEL*100:.1f}% std dev)...")
-        df = add_noise_to_dataframe(df, noise_level=NOISE_LEVEL, percentage_noise=PERCENTAGE_NOISE, noise_columns=NOISE_COLUMNS)
-    
+        noise_injector = NoiseInjector(
+            noise_columns=NOISE_COLUMNS,
+            base_noise_frac=BASE_NOISE_LEVEL,
+            spike_noise_frac= NOISE_LEVEL,
+            spike_row_fraction= PERCENTAGE_NOISE,
+            random_state=RANDOM_SEED
+
+        )
+#       df = add_noise_to_dataframe(df, noise_level=NOISE_LEVEL, percentage_noise=PERCENTAGE_NOISE, noise_columns=NOISE_COLUMNS)
+        df = noise_injector.apply(df)    
     # Generate output filename if not provided
     if output_file is None:
         exchanger_suffix = exchanger_type.lower()

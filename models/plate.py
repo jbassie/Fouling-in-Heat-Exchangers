@@ -92,8 +92,11 @@ class PlateHeatExchanger(BaseHeatExchanger):
         Nu = chevron_factor * self._calc_nusselt(Re, props['pr'])
         h = (Nu * props['k']) / Dh_eff
 
+        #Mixing degradation due to fouling is applied in calc_overall_U() as a penalty factor, not through geometry reduction.
+        mixing_penalty = 1.0 / (1.0 + 20 * Rf)
+
         return {
-            'h': h,
+            'h': h * mixing_penalty,
             'Velocity': velocity,
             'Re': Re,
             't_fouling': t_fouling,

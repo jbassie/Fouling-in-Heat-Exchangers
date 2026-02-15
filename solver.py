@@ -84,17 +84,17 @@ class Solver:
         Run heat exchanger simulation following the iterative algorithm.
         
         Algorithm:
-        (1) Random selection of inputs (done externally)
-        (2) Initialize guess for outlet temperatures
-        (3) Iterative solution until convergence:
-            (a) Evaluate hot side properties at bulk mean temperature
-            (b) Compute hot-side fouling variables and h_hot
-            (c) Evaluate cold side outlet guess from energy balance
-            (d) Determine cold-side fouling variables and h_cold
-            (e) Calculate U, NTU, epsilon
-            (f) Obtain actual outlet temperatures
-            (g) Update guesses using relaxation
-        (4) Record data with fouling resistances
+        (1) Randomly select inlet flow-rates, temperatures, and fouling factors
+        (2) Guess T_fo,guess ≤ T_fi and initialize T_fo = T_fi
+        (3) Repeat (a)-(g) until |T_fo,guess - T_fo| < 10^-6:
+            (a) Evaluate flue gas properties at bulk mean temperature
+            (b) Compute flue-side fouling variables (D_f,o, V_max,f, M_dot_flue,f, h_flue)
+            (c) Evaluate T_wo,guess from energy balance and water properties at bulk mean
+            (d) Determine water-side fouling variables (D_f,i, V_f, M_dot_w,f, h_w)
+            (e) Calculate U = f(h_flue, h_w, R1, R2), NTU = f(U, (M*Cp)_min), ε = f(U, NTU, Cr)
+            (f) Obtain T_fo and T_wo from computations
+            (g) Update T_fo,guess = (T_fo,guess + T_fo)/2 and T_wo,guess = (T_wo,guess + T_wo)/2
+        (4) Record generated data with fouling resistances (R1, R2)
         
         Args:
             inputs: Dictionary with keys:
@@ -117,7 +117,10 @@ class Solver:
         Rf_cold = inputs['R_f_cold']
         
         # Step 2: Initialize guess
+        # Algorithm: T_fo,guess ≤ T_fi and initialize T_fo = T_fi
         T_hot_out_guess = T_hot_in - 10.0  # Initial guess (T_out <= T_in)
+        T_hot_out = T_hot_in  # Initialize T_fo = T_fi (as per algorithm)
+        T_cold_out_guess = T_cold_in  # Initialize cold side guess
         
         iteration = 0
         error = float('inf')
@@ -172,25 +175,28 @@ class Solver:
             # (f) Obtain actual outlet temperatures
             Q_actual = epsilon * C_min * (T_hot_in - T_cold_in)
             T_hot_out_calc = T_hot_in - (Q_actual / C_h)
-            # C_c is used implicitly in the final cold outlet calculation below
+            T_cold_out_calc = T_cold_in + (Q_actual / C_c)
             
             # (g) Update guesses using relaxation
+            # Algorithm: T_fo,guess = (T_fo,guess + T_fo)/2 and T_wo,guess = (T_wo,guess + T_wo)/2
             T_hot_out_guess = (T_hot_out_guess + T_hot_out_calc) / 2
+            T_cold_out_guess = (T_cold_out_guess + T_cold_out_calc) / 2
+            T_hot_out = T_hot_out_calc  # Update T_fo
             
-            # Check convergence
-            error = abs(T_hot_out_calc - T_hot_out_guess)
+            # Check convergence: |T_fo,guess - T_fo| < 10^-6
+            error = abs(T_hot_out_guess - T_hot_out)
             iteration += 1
         
         # Step 4: Record data
-        # Recalculate cold side with final temperatures for accuracy
-        T_cold_out_final_guess = T_cold_in + (Q_actual / (m_dot_cold * props_cold['cp']))
-        T_cold_mean_final = (T_cold_in + T_cold_out_final_guess) / 2
+        # Use final calculated values from convergence
+        # Recalculate cold side with final temperatures for accuracy (using final Q_actual)
+        T_cold_mean_final = (T_cold_in + T_cold_out_guess) / 2
         props_cold_final = self.fluid_cold.get_properties(T_cold_mean_final)
         T_cold_out_final = T_cold_in + (Q_actual / (m_dot_cold * props_cold_final['cp']))
         
         # Build results dictionary
         results = {
-            'T_hot_out': T_hot_out_calc,
+            'T_hot_out': T_hot_out,  # Use T_fo (final converged value)
             'T_cold_out': T_cold_out_final,
             'Q_actual': Q_actual,
             'U_overall': U,

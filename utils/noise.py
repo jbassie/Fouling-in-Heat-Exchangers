@@ -58,6 +58,7 @@ def add_noise_to_dataframe(df: pd.DataFrame, noise_level: Optional[float] = None
 class NoiseInjector:
     """
     Adds realistic, traceable noise to simulation data.
+    
     """
 
     def __init__(
